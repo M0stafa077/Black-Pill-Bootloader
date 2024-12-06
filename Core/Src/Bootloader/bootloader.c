@@ -7,9 +7,12 @@
  */
 
 /* --------------- Section : Includes --------------- */
+
 #include "Bootloader/bootloader.h"
+
 /*---------------  Section: Global Variables --------------- */
-static uint8_t Received_Buffer[BOOTLOADER_MAX_BUFFER_SIZE];
+
+static uint8_t receivedBuffer[BOOTLOADER_MAX_BUFFER_SIZE];
 
 /*---------------  Section: Static Functions Declaration --------------- */
 static BL_ReturnType_t Bootloader_Get_Version(void);
@@ -18,91 +21,85 @@ static BL_ReturnType_t Bootloader_Get_Chip_ID(void);
 static BL_ReturnType_t Bootloader_Get_RDP_Status(void);
 static BL_ReturnType_t Bootloader_Jump_To_User_App();
 static BL_ReturnType_t Bootloader_GoTo_Address(void);
+static BL_ReturnType_t Bootloader_EraseFlash(void);
+static BL_ReturnType_t Bootloader_writeFlashMemory(void);
+static BL_ReturnType_t Bootloader_readFromFlash(void);
 
 static BL_ReturnType_t BL_Send_ACK_Message(uint8_t Reply_Lenght);
+static BL_ReturnType_t BL_Send_NACK_Message();
 static CRC_State_t BL_Check_CRC_Matching();
-static uint8_t BL_IsValidAddress(uint32_t userAddress);
+static inline uint8_t BL_IsValidAddress(uint32_t userAddress);
+uint32_t calculateCRC32(const uint8_t* buffer, uint8_t bufferLength);
 /*---------------  Section: Function Definitions --------------- */
 
 BL_ReturnType_t Bootloader_Fetch_Host_Command(void)
 {
-	BL_ReturnType_t Bootloader_State = BL_OK;
+	BL_ReturnType_t bootloaderStatus = BL_OK;
 	HAL_StatusTypeDef HAL_State = HAL_OK;
-	uint8_t Packet_Length = 0;
+	uint8_t packetLength = 0;
+
+
 	/* Reset the Buffer */
-	memset(Received_Buffer, BOOTLOADER_BUFFER_RESET, BOOTLOADER_MAX_BUFFER_SIZE);
+	memset(receivedBuffer, BOOTLOADER_BUFFER_RESET, BOOTLOADER_MAX_BUFFER_SIZE);
 
 	/* Receive the first byte => Data Length [N] */
-	HAL_State = HAL_UART_Receive(BOOTLOADER_UART_OBJECT, Received_Buffer,
-							1, HAL_MAX_DELAY);
+	HAL_State = receiveFromHost(receivedBuffer, 1);
 
-	if(!HAL_State)	/* HAL_OK */
+	if(HAL_State == HAL_OK)
 	{
-		Packet_Length = Received_Buffer[0];
+		packetLength = *receivedBuffer;
 
 		/* Receive the Second Byte => The Command */
-		HAL_State = HAL_UART_Receive(BOOTLOADER_UART_OBJECT, Received_Buffer + 1,
-							Packet_Length, HAL_MAX_DELAY);
-		if(!HAL_State) /* if HAL_OK */
-		{
-			switch(Received_Buffer[1])
-			{
+		HAL_State = receiveFromHost(&receivedBuffer[1], packetLength);
+
+
+		if(HAL_State == HAL_OK) {
+			switch(receivedBuffer[1]) {
 				case CBL_GET_VER_CMD:
-					Bootloader_State |= Bootloader_Get_Version();
+					bootloaderStatus |= Bootloader_Get_Version();
 					break;
 				case CBL_GET_HELP_CMD:
-					Bootloader_State |= Bootloader_Get_Help();
+					bootloaderStatus |= Bootloader_Get_Help();
 					break;
 				case CBL_GET_CID_CMD:
 					/* Chip ID = 0x423 */
-					Bootloader_State |= Bootloader_Get_Chip_ID();
+					bootloaderStatus |= Bootloader_Get_Chip_ID();
 					break;
 				case CBL_GET_RDP_STATUS_CMD:
-					Bootloader_State |= Bootloader_Get_RDP_Status();
+					bootloaderStatus |= Bootloader_Get_RDP_Status();
 					break;
 				case CBL_GO_TO_ADDR_CMD:
 					/* Go to address Function */
+					bootloaderStatus |= Bootloader_GoTo_Address();
 					break;
 				case CBL_GOTO_USER_APP_CMD:
-					Bootloader_State |= Bootloader_Jump_To_User_App();
+					bootloaderStatus |= Bootloader_Jump_To_User_App();
 					break;
 				case CBL_FLASH_ERASE_CMD:
 					/* Erase Flash Function */
+					bootloaderStatus |= Bootloader_EraseFlash();
 					break;
 				case CBL_MEM_WRITE_CMD:
 					/* Mmemory Write Function */
-					break;
-				case CBL_ED_W_PROTECT_CMD:
-					/* Function */
+					bootloaderStatus |= Bootloader_writeFlashMemory();
 					break;
 				case CBL_MEM_READ_CMD:
 					/* Memory Read Function */
+					bootloaderStatus |= Bootloader_readFromFlash();
 					break;
-				case CBL_READ_SECTOR_STATUS_CMD:
-					/* Read Sector Status Function */
-					break;
-				case CBL_OTP_READ_CMD:
-					/* Read OTP Function */
-					break;
-				case CBL_CHANGE_ROP_Level_CMD:
-					/* Change Read Out Protection Function */
-					break;
-				default: Bootloader_State |= BL_NOT_OK;
+				default: bootloaderStatus |= BL_NOT_OK;
 					break;
 			}
 		}
-		else
-		{
-			Bootloader_State |= BL_NOT_OK;	/* Reception is not successfull */
+		else {
+			bootloaderStatus |= BL_NOT_OK;	/* Reception is not successfull */
 		}
 
 	}
-	else
-	{
-		Bootloader_State |= BL_NOT_OK;	/* Reception is not successfull */
+	else {
+		bootloaderStatus |= BL_NOT_OK;	/* Reception is not successfull */
 	}
-//	Bootloader_Jump_To_User_App();
-	return Bootloader_State;
+	return bootloaderStatus;
 }
 
 /*---------------  Section: Static Functions Implementation --------------- */
@@ -122,13 +119,11 @@ static BL_ReturnType_t Bootloader_Get_Version(void)
 	}
 	/* Send ACK message */
 	Bootloader_State |= BL_Send_ACK_Message(sizeof(reply_message));
-	HAL_Delay(5);
 
 	/* Transmit the Version message */
 	if(Bootloader_State == BL_OK)
 	{
-		UART_State = HAL_UART_Transmit(BOOTLOADER_UART_OBJECT, reply_message,
-				sizeof(reply_message), HAL_MAX_DELAY);
+		UART_State = sendToHost(reply_message, (uint8_t)sizeof(reply_message));
 	}
 
 	if(UART_State == HAL_OK)
@@ -141,8 +136,7 @@ static BL_ReturnType_t Bootloader_Get_Version(void)
 
 static BL_ReturnType_t Bootloader_Get_Help(void)
 {
-	uint8_t reply_message[] =
-	{
+	uint8_t reply_message[] = {
 		CBL_GET_VER_CMD,
 		CBL_GET_HELP_CMD,
 		CBL_GET_CID_CMD,
@@ -162,8 +156,7 @@ static BL_ReturnType_t Bootloader_Get_Help(void)
 
 	/* Calculate the CRC For the received messgae */
 	CRC_State = BL_Check_CRC_Matching();
-	if(CRC_State == CRC_NOT_MATCH)
-	{
+	if(CRC_State == CRC_NOT_MATCH) {
 		return BL_NOT_OK;
 	}
 	/* Send ACK message */
@@ -171,10 +164,8 @@ static BL_ReturnType_t Bootloader_Get_Help(void)
 	HAL_Delay(5);
 
 	/* Transmit the Help message */
-	if(Bootloader_State == BL_OK)
-	{
-		UART_State = HAL_UART_Transmit(BOOTLOADER_UART_OBJECT, reply_message,
-				sizeof(reply_message), HAL_MAX_DELAY);
+	if(Bootloader_State == BL_OK) {
+		UART_State = sendToHost(reply_message, (uint8_t)sizeof(reply_message));
 	}
 
 	if(UART_State == HAL_OK)
@@ -185,8 +176,7 @@ static BL_ReturnType_t Bootloader_Get_Help(void)
 	return Bootloader_State;
 }
 
-static BL_ReturnType_t Bootloader_Get_Chip_ID(void)
-{
+static BL_ReturnType_t Bootloader_Get_Chip_ID(void) {
 	CRC_State_t CRC_State = CRC_MATCH;
 	BL_ReturnType_t Bootloader_State = BL_OK;
 	HAL_StatusTypeDef UART_State = HAL_OK;
@@ -196,10 +186,8 @@ static BL_ReturnType_t Bootloader_Get_Chip_ID(void)
 	reply_message = DBGMCU->IDCODE & 0xFFF;
 
 	/* Calculate the CRC For the received messgae */
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wreturn-type"
+
 	CRC_State = BL_Check_CRC_Matching();
-#pragma GCC diagnostic pop
 	if(CRC_State == CRC_NOT_MATCH)
 	{
 		return BL_NOT_OK;
@@ -213,11 +201,8 @@ static BL_ReturnType_t Bootloader_Get_Chip_ID(void)
 	{
 		uint8_t Low_Byte  = (uint8_t)(reply_message & 0xFF);
 		uint8_t High_Byte = (uint8_t)(reply_message >> 8);
-		UART_State = HAL_UART_Transmit(BOOTLOADER_UART_OBJECT, &Low_Byte,
-									1, HAL_MAX_DELAY);
-		HAL_Delay(2);
-		UART_State = HAL_UART_Transmit(BOOTLOADER_UART_OBJECT, &High_Byte,
-									1, HAL_MAX_DELAY);
+		UART_State = sendToHost(&Low_Byte, 1);
+		UART_State = sendToHost(&High_Byte, 1);
 	}
 	if(UART_State == HAL_OK)
 		{ Bootloader_State |= BL_OK; }
@@ -240,10 +225,7 @@ static BL_ReturnType_t Bootloader_Get_RDP_Status(void)
 	reply_message = (uint8_t)OB_Config.RDPLevel;
 
 	/* Calculate the CRC For the received message */
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wreturn-type"
 	CRC_State = BL_Check_CRC_Matching();
-#pragma GCC diagnostic pop
 	if(CRC_State == CRC_NOT_MATCH)
 	{
 		return BL_NOT_OK;	/* CRC Error */
@@ -255,8 +237,7 @@ static BL_ReturnType_t Bootloader_Get_RDP_Status(void)
 	/* Transmit the RDP Level */
 	if(Bootloader_State == BL_OK)
 	{
-		UART_State = HAL_UART_Transmit(BOOTLOADER_UART_OBJECT, &reply_message,
-									1, HAL_MAX_DELAY);
+		UART_State = sendToHost(&reply_message, sizeof(reply_message));
 	}
 	if(UART_State == HAL_OK)
 		{ Bootloader_State |= BL_OK; }
@@ -281,16 +262,14 @@ static BL_ReturnType_t Bootloader_Jump_To_User_App(void)
 
 #if USER_APPLICATION_SECTOR == FLASH_SECTOR_2
 	MSP_Value = *((volatile uint32_t *)(FLASH_SECTOR_2_BASE_ADD));
-#elif USER_APPLICATION_SECTOR == FLASH_SECTOR_4
-	MSP_Value = *((volatile uint32_t *)(FLASH_SECTOR_4_BASE_ADD));
-#endif
-
 	/* Get the Reset Handler function of the user application */
-#if USER_APPLICATION_SECTOR == FLASH_SECTOR_2
 	newAppResetHandlerAddress = *((volatile uint32_t *)(FLASH_SECTOR_2_BASE_ADD + 4));
 #elif USER_APPLICATION_SECTOR == FLASH_SECTOR_4
+	MSP_Value = *((volatile uint32_t *)(FLASH_SECTOR_4_BASE_ADD));
+	/* Get the Reset Handler function of the user application */
 	newAppResetHandlerAddress = *((volatile uint32_t *)(FLASH_SECTOR_4_BASE_ADD + 4));
 #endif
+
 	pToFun newAppResetHandler = (pToFun)newAppResetHandlerAddress;
 
 	/* De-Initialize the running peripherals */
@@ -307,9 +286,107 @@ static BL_ReturnType_t Bootloader_Jump_To_User_App(void)
 	return BL_OK;
 }
 
+/**
+ * CRC_MATCH => send ack.
+ *
+ */
 static BL_ReturnType_t Bootloader_GoTo_Address(void)
 {
+	uint32_t userAddress = *((uint32_t *)(&receivedBuffer[2]));
+	uint8_t isValidAddress = BL_IsValidAddress(userAddress);
+	CRC_State_t CRC_State = CRC_MATCH;
 
+	CRC_State = BL_Check_CRC_Matching();
+	if(CRC_State == CRC_MATCH) {
+		BL_Send_ACK_Message(0);
+	}
+	else {
+		return BL_NOT_OK;
+	}
+
+	if(isValidAddress) {
+		((pToFun)(userAddress | 0x01UL))();
+	} else {
+		return BL_NOT_OK;
+	}
+	return BL_OK;
+}
+
+static BL_ReturnType_t Bootloader_EraseFlash(void) {
+	CRC_State_t CRCState = CRC_MATCH;
+	CRCState = BL_Check_CRC_Matching();
+	if(CRCState == CRC_MATCH) {
+		BL_Send_ACK_Message(0);
+	}
+	else {
+		return BL_NOT_OK;
+	}
+	return Flash_Erase_Mass();
+}
+
+static BL_ReturnType_t Bootloader_writeFlashMemory(void) {
+	CRC_State_t CRCState = CRC_MATCH;
+	uint32_t baseAddress = *((uint32_t *)(&receivedBuffer[2]));
+	uint8_t dataLength = receivedBuffer[0] - 10;
+	BL_ReturnType_t bootloaderStatus = BL_OK;
+
+	CRCState = BL_Check_CRC_Matching();
+	if(CRCState == CRC_MATCH) {
+		BL_Send_ACK_Message(1);
+	}
+	else {
+		BL_Send_NACK_Message();
+	}
+
+    // Reverse the byte order
+    baseAddress = convertWordToBigEndian(baseAddress);
+
+	uint8_t isValidAddress = ((baseAddress >= FLASH_BASE) && (baseAddress <= FLASH_END));
+	if (!isValidAddress) {
+		sendToHost((uint8_t *) "X", 1);
+		return BL_NOT_OK;
+	}
+
+	bootloaderStatus |= flashWrite(baseAddress, (uint8_t *)&receivedBuffer[6], dataLength);
+
+    if(bootloaderStatus) {
+    	sendToHost((uint8_t *) "E", 1);
+    } else {
+    	sendToHost((uint8_t *) "O", 1);
+    }
+	return bootloaderStatus;
+}
+
+static BL_ReturnType_t Bootloader_readFromFlash(void) {
+	CRC_State_t CRCState = CRC_MATCH;
+	uint32_t baseAddress = *((uint32_t *)(&receivedBuffer[2]));
+	uint8_t dataLength = receivedBuffer[6];
+	BL_ReturnType_t bootloaderStatus = BL_OK;
+
+	CRCState = BL_Check_CRC_Matching();
+	if(CRCState == CRC_MATCH) {
+		BL_Send_ACK_Message(dataLength);
+	}
+	else {
+		BL_Send_NACK_Message();
+	}
+    // Reverse the byte order
+    baseAddress = convertWordToBigEndian(baseAddress);
+	uint8_t isValidAddress = ((baseAddress >= FLASH_BASE) && (baseAddress <= FLASH_END)) && (baseAddress % 4 == 0);
+	if (!isValidAddress) {
+		sendToHost((uint8_t *) "E", 1);
+		sendDebuggingMessage((uint8_t *)"Invalid Address", 3);
+		return BL_NOT_OK;
+	}
+
+	for(uint8_t i = 0; i < dataLength; ++i) {
+		uint32_t data = *((volatile uint32_t *)baseAddress);
+
+		for(uint8_t j = 0; j < 4; ++j) {
+			bootloaderStatus |= sendToHost((uint8_t *)&data, 1);
+		}
+	}
+	return bootloaderStatus;
 }
 
 
@@ -326,28 +403,48 @@ static BL_ReturnType_t BL_Send_ACK_Message(uint8_t Reply_Lenght)
 	return (UART_State == HAL_OK) ? BL_OK : BL_NOT_OK;
 }
 
+static BL_ReturnType_t BL_Send_NACK_Message()
+{
+	HAL_StatusTypeDef UART_State = HAL_OK;
+	uint8_t acknowledge_message[1] = { BL_NACK_MESSAGE };
+
+	/* Transmit the acknowledge message over UART */
+	UART_State = HAL_UART_Transmit(BOOTLOADER_UART_OBJECT, acknowledge_message,
+			1, HAL_MAX_DELAY);
+
+	return (UART_State == HAL_OK) ? BL_OK : BL_NOT_OK;
+}
+uint32_t calculateCRC32(const uint8_t* buffer, uint8_t bufferLength) {
+  uint32_t CRC_Value = 0xFFFFFFFF;
+
+  for (uint8_t i = 0; i < bufferLength; ++i) {
+    CRC_Value ^= buffer[i];
+
+    for (int DataElemBitLen = 0; DataElemBitLen < 32; ++DataElemBitLen) {  // 8 bits per byte
+      if (CRC_Value & 0x80000000) {
+        CRC_Value = (CRC_Value << 1) ^ 0x04C11DB7;
+      } else {
+        CRC_Value = (CRC_Value << 1);
+      }
+    }
+
+  }
+  return convertWordToBigEndian((uint32_t)(CRC_Value & 0xFFFFFFFF));
+}
 static CRC_State_t BL_Check_CRC_Matching(void)
 {
-	uint32_t calculatedCRC = 0;
-	uint32_t dummyWord = 0;
-	uint8_t packetLen = Received_Buffer[0] + 1;
+	uint32_t crcResult = 0xFFFFFFFF;
 	uint32_t hostCRC = 0;
+	uint8_t packetLen = receivedBuffer[0] + 1;
 	/* Get the received CRC */
-	hostCRC = *((uint32_t *)((Received_Buffer + packetLen) - 4));
-	for(uint8_t i = 0; i < (packetLen - 4); ++i)
-	{
-		dummyWord = (uint32_t)Received_Buffer[i];
-		calculatedCRC = HAL_CRC_Accumulate(BOOTLOADER_CRC_OBJECT, &dummyWord, 1);
-	}
-	// Reset the CRC Calculation Unit
-	__HAL_CRC_DR_RESET(BOOTLOADER_CRC_OBJECT);
-	// Return the result
-	return (hostCRC == calculatedCRC) ? CRC_MATCH : CRC_NOT_MATCH;
+	hostCRC = *((uint32_t *)((receivedBuffer + packetLen) - 4));
+	crcResult = calculateCRC32(receivedBuffer, packetLen - 4);
+	return (hostCRC == crcResult) ? CRC_MATCH : CRC_NOT_MATCH;
 }
 
-static uint8_t BL_IsValidAddress(uint32_t userAddress)
+static inline uint8_t BL_IsValidAddress(uint32_t userAddress)
 {
-
+	//	Address is valid only if it's within the SRAM or the FLASH memories
+	return (((userAddress >= SRAM1_BASE) && (userAddress <= 0x2000FFFF))
+			|| ((userAddress >= FLASH_BASE) && (userAddress <= FLASH_END)));
 }
-
-

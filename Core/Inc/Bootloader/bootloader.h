@@ -17,6 +17,8 @@
 #include "stm32f4xx_hal.h"
 #include "stm32f4xx_hal_flash_ex.h"
 #include "Bootloader_Cfg.h"
+#include "flashServices/flashServices.h"
+#include "helperFunctions/helperFunctions.h"
 /* --------------- Section: Macro Declarations --------------- */
 
 /* !< Bootloader Supported Commands */
@@ -58,15 +60,15 @@
 #define BL_PATCH_VERSION			0x00
 
 /* !< Bootloader ACK message */
-#define BL_ACK_MESSAGE				0x00
+#define BL_ACK_MESSAGE				0xDD
 /* !< Bootloader NACK message */
-#define BL_NACK_MESSAGE				0x01
+#define BL_NACK_MESSAGE				0xEE
 
 #define FLASH_SECTOR_2_BASE_ADD		0x08008000
 #define FLASH_SECTOR_4_BASE_ADD		0x08010000
 
 #define BL_VALID_ADDRESS			(uint8_t)0x01
-#define BL_InVALID_ADDRESS			(uint8_t)0x00
+#define BL_INVALID_ADDRESS			(uint8_t)0x00
 /* --------------- Section: External Variables --------------- */
 extern CRC_HandleTypeDef hcrc;
 extern UART_HandleTypeDef huart2;
